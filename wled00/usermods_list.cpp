@@ -11,6 +11,10 @@
  */
 //#include "../usermods/EXAMPLE_v2/usermod_v2_example.h"
 
+#ifdef USERMOD_BLE
+  #include "../usermods/ble_mod/ble_mod.h"
+#endif
+
 #ifdef USERMOD_BATTERY
   #include "../usermods/Battery/usermod_v2_Battery.h"
 #endif
@@ -209,6 +213,10 @@ void registerUsermods()
    * \/ \/ \/
    */
   //usermods.add(new MyExampleUsermod());
+  #ifdef USERMOD_BLE
+  usermods.add(new BLEUsermod());
+  #endif
+
   #ifdef USERMOD_BATTERY
   usermods.add(new UsermodBattery());
   #endif
