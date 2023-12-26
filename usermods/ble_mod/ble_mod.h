@@ -2,6 +2,15 @@
 
 #include "wled.h"
 
+#include "NimBLEDevice.h"
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+
+static NimBLEUUID dataUuid(SERVICE_UUID);
+static NimBLEAdvertising *pAdvertising = nullptr;
+static uint32_t count = 0;
+static TaskHandle_t  Core0Task;
+static void advertise( void * pvParameters );
+
 /*
  * Usermods allow you to add own functionality to WLED more easily
  * See: https://github.com/Aircoookie/WLED/wiki/Add-own-functionality
@@ -45,10 +54,33 @@ class BLEUsermod : public Usermod {
     static const char _name[];
     static const char _enabled[];
 
+    // NimBLEUUID dataUuid{SERVICE_UUID};
+    // NimBLEAdvertising *pAdvertising;
+    // uint32_t count;
 
     // any private methods should go here (non-inline method should be defined out of class)
     void publishMqtt(const char* state, bool retain = false); // example for publishing MQTT message
 
+    void SetupBLE(){
+
+      count = 0;
+
+      //returns false if wifi not running?
+      //try to read the config value or add more wifi checks
+      if (!WiFi.getSleep()){
+        Serial.printf("Wifi Sleep Mode is required for BLE\n");
+        //disable mod
+        enable(false);
+        initDone = false;
+        pAdvertising = nullptr;
+        //todo: write to usermode page
+      } else {
+        Serial.printf("Setup for BLE\n");
+        NimBLEDevice::init("svc data");
+        pAdvertising = NimBLEDevice::getAdvertising();
+      }
+
+    }
 
   public:
 
@@ -90,6 +122,9 @@ class BLEUsermod : public Usermod {
     void setup() {
       // do your set-up here
       Serial.println("Hello from my usermod!");
+   
+      SetupBLE();
+
       initDone = true;
     }
 
@@ -99,7 +134,7 @@ class BLEUsermod : public Usermod {
      * Use it to initialize network interfaces
      */
     void connected() {
-      //Serial.println("Connected to WiFi!");
+      Serial.println("Connected to WiFi!");
     }
 
 
@@ -119,9 +154,20 @@ class BLEUsermod : public Usermod {
       if (!enabled || strip.isUpdating()) return;
 
       // do your magic here
-      if (millis() - lastTime > 1000) {
+      if (millis() - lastTime > 5000) {
         //Serial.println("I'm alive!");
         lastTime = millis();
+
+        advertise(NULL);
+        // xTaskCreatePinnedToCore(
+        //   advertise, /* Function to implement the task */
+        //   "Task1", /* Name of the task */
+        //   10000,  /* Stack size in words */
+        //   NULL,  /* Task input parameter */
+        //   0,  /* Priority of the task */
+        //   &Core0Task,  /* Task handle. */
+        // 0); /* Core where the task should run */
+
       }
     }
 
@@ -261,6 +307,8 @@ class BLEUsermod : public Usermod {
       JsonObject top = root[FPSTR(_name)];
 
       bool configComplete = !top.isNull();
+      
+      configComplete &= getJsonValue(top[FPSTR(_enabled)], enabled);
 
       configComplete &= getJsonValue(top["great"], userVar0);
       configComplete &= getJsonValue(top["testBool"], testBool);
@@ -389,6 +437,8 @@ class BLEUsermod : public Usermod {
 const char BLEUsermod::_name[]    PROGMEM = "BLE-Usermod";
 const char BLEUsermod::_enabled[] PROGMEM = "enabled";
 
+//static NimBLEUUID dataUuid(SERVICE_UUID);
+
 
 // implementation of non-inline member methods
 
@@ -403,4 +453,39 @@ void BLEUsermod::publishMqtt(const char* state, bool retain)
     mqtt->publish(subuf, 0, retain, state);
   }
 #endif
+}
+
+
+// void BLEUsermod::SetupBLE(){
+
+//   pAdvertising = nullptr;
+//   count = 0;
+
+//   NimBLEDevice::init("svc data");
+//   pAdvertising = NimBLEDevice::getAdvertising();
+
+// }
+
+static void advertise( void * pvParameters ){
+
+  if (pAdvertising == nullptr){
+    NimBLEDevice::init("svc data");
+    pAdvertising = NimBLEDevice::getAdvertising();
+  } else {
+
+  }
+
+  if (!WiFi.getSleep()){
+    Serial.printf("2Wifi Sleep Mode is required for BLE\n");
+    pAdvertising = nullptr;
+  } else {
+    Serial.printf("Start advertise\n");
+    pAdvertising->stop();
+    pAdvertising->setServiceData(dataUuid, std::string((char*)&count, sizeof(count)));  
+    pAdvertising->start();
+
+    Serial.printf("Advertising count = %d\n", count);
+    count++;
+  }
+
 }
