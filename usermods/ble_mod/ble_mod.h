@@ -3,13 +3,20 @@
 #include "wled.h"
 
 #include "NimBLEDevice.h"
-#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define SERVICE_UUID "b2bbc642-46da-11ed-b878-0242ac120002"
+#define CHARACTERISTIC_UUID "c9af9c76-46de-11ed-b878-0242ac120002"
 
+static NimBLEUUID serviceUuid(SERVICE_UUID);
+static NimBLEUUID characteristic1Uuid(CHARACTERISTIC_UUID);
 static NimBLEUUID dataUuid(SERVICE_UUID);
 static NimBLEAdvertising *pAdvertising = nullptr;
 static uint32_t count = 0;
-static TaskHandle_t  Core0Task;
 static void advertise( void * pvParameters );
+static void advertise2();
+
+static NimBLEServer *pServer = nullptr;
+static NimBLEService *pService = nullptr;
+static NimBLECharacteristic *pCharacteristic = nullptr;
 
 /*
  * Usermods allow you to add own functionality to WLED more easily
@@ -54,30 +61,23 @@ class BLEUsermod : public Usermod {
     static const char _name[];
     static const char _enabled[];
 
-    // NimBLEUUID dataUuid{SERVICE_UUID};
-    // NimBLEAdvertising *pAdvertising;
-    // uint32_t count;
-
     // any private methods should go here (non-inline method should be defined out of class)
     void publishMqtt(const char* state, bool retain = false); // example for publishing MQTT message
 
     void SetupBLE(){
 
-      count = 0;
-
       //returns false if wifi not running?
       //try to read the config value or add more wifi checks
-      if (!WiFi.getSleep()){
+      if (noWifiSleep){
         Serial.printf("Wifi Sleep Mode is required for BLE\n");
+        Serial.printf("!noWifiSleep    is: %d\n", !noWifiSleep );
         //disable mod
         enable(false);
-        initDone = false;
-        pAdvertising = nullptr;
         //todo: write to usermode page
       } else {
         Serial.printf("Setup for BLE\n");
-        NimBLEDevice::init("svc data");
-        pAdvertising = NimBLEDevice::getAdvertising();
+        //NimBLEDevice::init("svc data");
+        //pAdvertising = NimBLEDevice::getAdvertising();
       }
 
     }
@@ -156,17 +156,9 @@ class BLEUsermod : public Usermod {
       // do your magic here
       if (millis() - lastTime > 5000) {
         //Serial.println("I'm alive!");
-        lastTime = millis();
+        lastTime = millis();       
 
-        advertise(NULL);
-        // xTaskCreatePinnedToCore(
-        //   advertise, /* Function to implement the task */
-        //   "Task1", /* Name of the task */
-        //   10000,  /* Stack size in words */
-        //   NULL,  /* Task input parameter */
-        //   0,  /* Priority of the task */
-        //   &Core0Task,  /* Task handle. */
-        // 0); /* Core where the task should run */
+        advertise2();
 
       }
     }
@@ -184,10 +176,15 @@ class BLEUsermod : public Usermod {
       if (user.isNull()) user = root.createNestedObject("u");
 
       //this code adds "u":{"ExampleUsermod":[20," lux"]} to the info object
-      //int reading = 20;
-      //JsonArray lightArr = user.createNestedArray(FPSTR(_name))); //name
-      //lightArr.add(reading); //value
-      //lightArr.add(F(" lux")); //unit
+      String reading = noWifiSleep ? "disabled" : "enabled";
+
+      JsonArray infoArr = user.createNestedArray(FPSTR(_name));  // name
+
+      String uiDomString = F("<div class=\"xxx\">");
+      uiDomString += F("WiFi Powersave Mode is: <strong>");
+      uiDomString += reading;
+      uiDomString += F("</strong></div>");
+      infoArr.add(uiDomString);
 
       // if you are implementing a sensor usermod, you may publish sensor data
       //JsonObject sensor = root[F("sensor")];
@@ -271,16 +268,16 @@ class BLEUsermod : public Usermod {
       JsonObject top = root.createNestedObject(FPSTR(_name));
       top[FPSTR(_enabled)] = enabled;
       //save these vars persistently whenever settings are saved
-      top["great"] = userVar0;
-      top["testBool"] = testBool;
-      top["testInt"] = testInt;
-      top["testLong"] = testLong;
-      top["testULong"] = testULong;
-      top["testFloat"] = testFloat;
-      top["testString"] = testString;
-      JsonArray pinArray = top.createNestedArray("pin");
-      pinArray.add(testPins[0]);
-      pinArray.add(testPins[1]); 
+      // top["great"] = userVar0;
+      // top["testBool"] = testBool;
+      // top["testInt"] = testInt;
+      // top["testLong"] = testLong;
+      // top["testULong"] = testULong;
+      // top["testFloat"] = testFloat;
+      // top["testString"] = testString;
+      // JsonArray pinArray = top.createNestedArray("pin");
+      // pinArray.add(testPins[0]);
+      // pinArray.add(testPins[1]); 
     }
 
 
@@ -310,19 +307,19 @@ class BLEUsermod : public Usermod {
       
       configComplete &= getJsonValue(top[FPSTR(_enabled)], enabled);
 
-      configComplete &= getJsonValue(top["great"], userVar0);
-      configComplete &= getJsonValue(top["testBool"], testBool);
-      configComplete &= getJsonValue(top["testULong"], testULong);
-      configComplete &= getJsonValue(top["testFloat"], testFloat);
-      configComplete &= getJsonValue(top["testString"], testString);
+      // configComplete &= getJsonValue(top["great"], userVar0);
+      // configComplete &= getJsonValue(top["testBool"], testBool);
+      // configComplete &= getJsonValue(top["testULong"], testULong);
+      // configComplete &= getJsonValue(top["testFloat"], testFloat);
+      // configComplete &= getJsonValue(top["testString"], testString);
 
-      // A 3-argument getJsonValue() assigns the 3rd argument as a default value if the Json value is missing
-      configComplete &= getJsonValue(top["testInt"], testInt, 42);  
-      configComplete &= getJsonValue(top["testLong"], testLong, -42424242);
+      // // A 3-argument getJsonValue() assigns the 3rd argument as a default value if the Json value is missing
+      // configComplete &= getJsonValue(top["testInt"], testInt, 42);  
+      // configComplete &= getJsonValue(top["testLong"], testLong, -42424242);
 
-      // "pin" fields have special handling in settings page (or some_pin as well)
-      configComplete &= getJsonValue(top["pin"][0], testPins[0], -1);
-      configComplete &= getJsonValue(top["pin"][1], testPins[1], -1);
+      // // "pin" fields have special handling in settings page (or some_pin as well)
+      // configComplete &= getJsonValue(top["pin"][0], testPins[0], -1);
+      // configComplete &= getJsonValue(top["pin"][1], testPins[1], -1);
 
       return configComplete;
     }
@@ -335,11 +332,11 @@ class BLEUsermod : public Usermod {
      */
     void appendConfigData()
     {
-      oappend(SET_F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F(":great")); oappend(SET_F("',1,'<i>(this is a great config value)</i>');"));
-      oappend(SET_F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F(":testString")); oappend(SET_F("',1,'enter any string you want');"));
-      oappend(SET_F("dd=addDropdown('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F("','testInt');"));
-      oappend(SET_F("addOption(dd,'Nothing',0);"));
-      oappend(SET_F("addOption(dd,'Everything',42);"));
+      // oappend(SET_F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F(":great")); oappend(SET_F("',1,'<i>(this is a great config value)</i>');"));
+      // oappend(SET_F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F(":testString")); oappend(SET_F("',1,'enter any string you want');"));
+      // oappend(SET_F("dd=addDropdown('")); oappend(String(FPSTR(_name)).c_str()); oappend(SET_F("','testInt');"));
+      // oappend(SET_F("addOption(dd,'Nothing',0);"));
+      // oappend(SET_F("addOption(dd,'Everything',42);"));
     }
 
 
@@ -425,7 +422,8 @@ class BLEUsermod : public Usermod {
      */
     uint16_t getId()
     {
-      return USERMOD_ID_EXAMPLE;
+      //TODO
+      return 50; //USERMOD_ID_EXAMPLE;
     }
 
    //More methods can be added in the future, this example will then be extended.
@@ -436,8 +434,6 @@ class BLEUsermod : public Usermod {
 // add more strings here to reduce flash memory usage
 const char BLEUsermod::_name[]    PROGMEM = "BLE-Usermod";
 const char BLEUsermod::_enabled[] PROGMEM = "enabled";
-
-//static NimBLEUUID dataUuid(SERVICE_UUID);
 
 
 // implementation of non-inline member methods
@@ -456,15 +452,71 @@ void BLEUsermod::publishMqtt(const char* state, bool retain)
 }
 
 
-// void BLEUsermod::SetupBLE(){
+static void advertise2(){
 
-//   pAdvertising = nullptr;
-//   count = 0;
+  if (pServer == nullptr || pService == nullptr){
+    NimBLEDevice::init("W[(B)LE]D");
+    pServer = NimBLEDevice::createServer();
+    pService = pServer->createService(SERVICE_UUID);
+    pCharacteristic = pService->createCharacteristic(
+                                          CHARACTERISTIC_UUID,
+                                    /***** Enum Type NIMBLE_PROPERTY now *****      
+                                          BLECharacteristic::PROPERTY_READ   |
+                                          BLECharacteristic::PROPERTY_WRITE  
+                                          );
+                                    *****************************************/
+                                          NIMBLE_PROPERTY::READ |
+                                          NIMBLE_PROPERTY::WRITE 
+                                        );
+    pCharacteristic->setValue("Hello World says werty1st");
+    pAdvertising = NimBLEDevice::getAdvertising();
+  } else {
+    
 
-//   NimBLEDevice::init("svc data");
-//   pAdvertising = NimBLEDevice::getAdvertising();
+  }
 
-// }
+  
+  // pAdvertising->stop();
+  // pAdvertising->removeServiceUUID(serviceUuid);
+  // pAdvertising->setServiceData(serviceUuid, std::string((char*)&count, sizeof(count)));  
+  // pAdvertising->start();
+  pService->start(); 
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  
+  std::string value = pCharacteristic->getValue();
+  uint8_t *pData = (uint8_t*)value.data();
+  /** These methods have been removed **
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x12);
+  */
+  
+  NimBLEDevice::startAdvertising();
+  printf("Characteristic Value: %s\n", pData);
+
+  String preset = value.data();
+  // for(int i=0; i<preset.length();i++){
+  //   printf("Characteristic INT %i: %i\n", i, preset[i]);
+  // }
+
+  if (preset[0] > 0 && preset[0] < 100) {
+    //applyPreset(byte index, bool loadBri)
+    printf("applyPreset: %i\n", preset[0]);
+    applyPreset(preset[0]);
+  } else if (preset[0] == 100){
+    //bri = 0;
+    toggleOnOff();
+    stateUpdated(CALL_MODE_DIRECT_CHANGE);
+    printf("toggleOnOff");
+  }
+  else {
+    //reset
+    printf("reset pCharacteristic\n");
+    pCharacteristic->setValue("Hello World says werty1st");
+
+  }
+
+}
 
 static void advertise( void * pvParameters ){
 
@@ -475,9 +527,8 @@ static void advertise( void * pvParameters ){
 
   }
 
-  if (!WiFi.getSleep()){
-    Serial.printf("2Wifi Sleep Mode is required for BLE\n");
-    pAdvertising = nullptr;
+  if (noWifiSleep){
+    Serial.printf("3Wifi Sleep Mode is required for BLE\n");
   } else {
     Serial.printf("Start advertise\n");
     pAdvertising->stop();
