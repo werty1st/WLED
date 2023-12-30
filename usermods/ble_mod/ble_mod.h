@@ -4,19 +4,19 @@
 
 #include "NimBLEDevice.h"
 #define SERVICE_UUID "b2bbc642-46da-11ed-b878-0242ac120002"
-#define CHARACTERISTIC_UUID "c9af9c76-46de-11ed-b878-0242ac120002"
+#define GET_PRESETS_CHARACTERISTIC_UUID    "c9af9c76-46de-11ed-b878-0242ac120002"
+#define SET_PRESETS_CHARACTERISTIC_UUID    "c9af9c76-56de-11ed-b878-0242ac120002"
+#define SET_BRIGHTNESS_CHARACTERISTIC_UUID "c9af9c76-76de-11ed-b878-0242ac120002"
 
-static NimBLEUUID serviceUuid(SERVICE_UUID);
-static NimBLEUUID characteristic1Uuid(CHARACTERISTIC_UUID);
-static NimBLEUUID dataUuid(SERVICE_UUID);
+
 static NimBLEAdvertising *pAdvertising = nullptr;
-static uint32_t count = 0;
-static void advertise( void * pvParameters );
 static void advertise2();
 
 static NimBLEServer *pServer = nullptr;
 static NimBLEService *pService = nullptr;
-static NimBLECharacteristic *pCharacteristic = nullptr;
+static NimBLECharacteristic *getPresetCharacteristic = nullptr;
+static NimBLECharacteristic *setPresetCharacteristic = nullptr;
+static NimBLECharacteristic *setBrightsnessCharacteristic = nullptr;
 
 /*
  * Usermods allow you to add own functionality to WLED more easily
@@ -154,7 +154,7 @@ class BLEUsermod : public Usermod {
       if (!enabled || strip.isUpdating()) return;
 
       // do your magic here
-      if (millis() - lastTime > 5000) {
+      if (millis() - lastTime > 1000) {
         //Serial.println("I'm alive!");
         lastTime = millis();       
 
@@ -452,24 +452,91 @@ void BLEUsermod::publishMqtt(const char* state, bool retain)
 }
 
 
+
+
+static String loadPresets()
+{
+
+  String presets = "";
+  if (!requestJSONBufferLock(9)) return presets;
+
+  if (readObjectFromFile("/presets.json", nullptr, &doc))
+  {
+    //DynamicJsonDocument result(500);
+    // StaticJsonDocument<32> filter;
+    // filter["*"]["n"] = true;
+    // deserializeJson(result, presetsJson, DeserializationOption::Filter(filter));
+
+    // for (JsonPair kv : doc.as<JsonObject>()) {
+    //   if (kv.value()["n"].is<char*>()) {
+    //     Serial.print("Key: ");
+    //     Serial.print(kv.key().c_str());
+    //     Serial.print(", Wert von 'n': ");
+    //     Serial.println(kv.value()["n"].as<char*>());
+    //   }
+    // }
+
+    StaticJsonDocument<500> filteredDoc;
+    for (JsonPair kv : doc.as<JsonObject>()) {
+      const char* key = kv.key().c_str();
+      const char* value = kv.value()["n"];
+      filteredDoc[key] = value;
+    }    
+
+    serializeJson(filteredDoc, presets);
+    printf("Preset JSON: %s\n", presets.c_str());
+  }
+  releaseJSONBufferLock();
+  return presets;
+}
+
 static void advertise2(){
+
+  
+  
 
   if (pServer == nullptr || pService == nullptr){
     NimBLEDevice::init("W[(B)LE]D");
     pServer = NimBLEDevice::createServer();
     pService = pServer->createService(SERVICE_UUID);
-    pCharacteristic = pService->createCharacteristic(
-                                          CHARACTERISTIC_UUID,
+    getPresetCharacteristic = pService->createCharacteristic(
+                                          GET_PRESETS_CHARACTERISTIC_UUID,
                                     /***** Enum Type NIMBLE_PROPERTY now *****      
                                           BLECharacteristic::PROPERTY_READ   |
                                           BLECharacteristic::PROPERTY_WRITE  
                                           );
                                     *****************************************/
-                                          NIMBLE_PROPERTY::READ |
+                                          NIMBLE_PROPERTY::READ
+                                        );
+    setPresetCharacteristic = pService->createCharacteristic(
+                                          SET_PRESETS_CHARACTERISTIC_UUID,
+                                    /***** Enum Type NIMBLE_PROPERTY now *****      
+                                          BLECharacteristic::PROPERTY_READ   |
+                                          BLECharacteristic::PROPERTY_WRITE  
+                                          );
+                                    *****************************************/
                                           NIMBLE_PROPERTY::WRITE 
                                         );
-    pCharacteristic->setValue("Hello World says werty1st");
+
+    setBrightsnessCharacteristic = pService->createCharacteristic(
+                                          SET_BRIGHTNESS_CHARACTERISTIC_UUID,
+                                    /***** Enum Type NIMBLE_PROPERTY now *****      
+                                          BLECharacteristic::PROPERTY_READ   |
+                                          BLECharacteristic::PROPERTY_WRITE  
+                                          );
+                                    *****************************************/
+                                          NIMBLE_PROPERTY::WRITE 
+                                        );
+
+    String presets = loadPresets();
+    getPresetCharacteristic->setValue(presets);
+
     pAdvertising = NimBLEDevice::getAdvertising();
+
+    pService->start(); 
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(true);
+
   } else {
     
 
@@ -480,63 +547,68 @@ static void advertise2(){
   // pAdvertising->removeServiceUUID(serviceUuid);
   // pAdvertising->setServiceData(serviceUuid, std::string((char*)&count, sizeof(count)));  
   // pAdvertising->start();
-  pService->start(); 
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  
-  std::string value = pCharacteristic->getValue();
-  uint8_t *pData = (uint8_t*)value.data();
-  /** These methods have been removed **
-  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
-  pAdvertising->setMinPreferred(0x12);
-  */
-  
+
   NimBLEDevice::startAdvertising();
-  printf("Characteristic Value: %s\n", pData);
+  
+  std::string value = setPresetCharacteristic->getValue();
+  uint8_t *data = (uint8_t*)value.data();
+  int preset = data[0];
 
-  String preset = value.data();
-  // for(int i=0; i<preset.length();i++){
-  //   printf("Characteristic INT %i: %i\n", i, preset[i]);
-  // }
+  //printf("setPresetCharacteristic Value: %u\n", preset);
+  //printf("reset setPresetCharacteristic\n");
+  setPresetCharacteristic->setValue(0);
 
-  if (preset[0] > 0 && preset[0] < 100) {
-    //applyPreset(byte index, bool loadBri)
-    printf("applyPreset: %i\n", preset[0]);
-    applyPreset(preset[0]);
-  } else if (preset[0] == 100){
-    //bri = 0;
+  if (preset > 0 && preset < 100) {
+    printf("applyPreset: %i\n", preset);
+    applyPreset(preset);
+  } else if (preset == 100){
+    printf("toggleOnOff\n");
     toggleOnOff();
     stateUpdated(CALL_MODE_DIRECT_CHANGE);
-    printf("toggleOnOff");
   }
   else {
-    //reset
-    printf("reset pCharacteristic\n");
-    pCharacteristic->setValue("Hello World says werty1st");
 
   }
+
+  std::string brivalue = setBrightsnessCharacteristic->getValue();
+  uint8_t *bridata = (uint8_t*)brivalue.data();
+  int newbri = bridata[0];
+  
+  if (newbri > 0 && newbri < 101){
+    bri = newbri;
+    applyFinalBri();
+    stateUpdated(CALL_MODE_DIRECT_CHANGE);
+    printf("apply bri: %i\n", bri);
+    setBrightsnessCharacteristic->setValue(0);
+  }
+
+
+  // std::string value = setPresetCharacteristic->getValue();
+  // uint8_t preset = (uint8_t)value.data();
+  //reset
+
 
 }
 
-static void advertise( void * pvParameters ){
+// static void advertise( void * pvParameters ){
 
-  if (pAdvertising == nullptr){
-    NimBLEDevice::init("svc data");
-    pAdvertising = NimBLEDevice::getAdvertising();
-  } else {
+//   if (pAdvertising == nullptr){
+//     NimBLEDevice::init("svc data");
+//     pAdvertising = NimBLEDevice::getAdvertising();
+//   } else {
 
-  }
+//   }
 
-  if (noWifiSleep){
-    Serial.printf("3Wifi Sleep Mode is required for BLE\n");
-  } else {
-    Serial.printf("Start advertise\n");
-    pAdvertising->stop();
-    pAdvertising->setServiceData(dataUuid, std::string((char*)&count, sizeof(count)));  
-    pAdvertising->start();
+//   if (noWifiSleep){
+//     Serial.printf("3Wifi Sleep Mode is required for BLE\n");
+//   } else {
+//     Serial.printf("Start advertise\n");
+//     pAdvertising->stop();
+//     pAdvertising->setServiceData(dataUuid, std::string((char*)&count, sizeof(count)));  
+//     pAdvertising->start();
 
-    Serial.printf("Advertising count = %d\n", count);
-    count++;
-  }
+//     Serial.printf("Advertising count = %d\n", count);
+//     count++;
+//   }
 
-}
+// }
